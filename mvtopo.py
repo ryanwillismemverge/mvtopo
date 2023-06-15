@@ -1,12 +1,18 @@
 import subprocess
 import os
 import re
+import json
+
+cxl_cmd = '~/ndctl/build/cxl/cxl'
+dax_cmd = '~/ndctl/build/daxctl/daxctl'
 
 def generate_topology() -> dict:
     graph = {}
-    #generate_numa_nodes(graph)
-    #generate_dax_devices(graph)
+    generate_numa_nodes(graph)
+    generate_dax_devices(graph)
     generate_cxl_devices(graph)
+    generate_root_devices(graph)
+    generate_mem_dax_links(graph)
     # ....
     return graph
 
@@ -41,7 +47,13 @@ def generate_dax_devices(graph: dict):
                 target_node = int(file.read().strip())
             with open(numa_node_file, 'r') as file:
                 numa_node = int(file.read().strip())
-            graph[item] = {"target_node": target_node, "numa_node": numa_node}    
+            graph[item] = {
+                "type": "dax",
+                "links": set(),
+                "parent": set(),
+                "target_node": target_node, 
+                "numa_node": numa_node
+                }    
     return devices
 
 
@@ -52,6 +64,7 @@ def generate_cxl_devices(graph: dict):
             # Use lstopo-no-graphic
             memdev = {
                 'type': 'cxl',
+                'serial': get_memdev_serial(item),
                 'links': set(),
                 'parent': set()
             }
@@ -116,6 +129,69 @@ def parse_lstopo_output(memdev):
                 host_bridge_info.append(int(host_bridge_match.group(2)))
     info_dict['host_bridge'] = host_bridge_info
     return info_dict
+
+def generate_root_devices(graph: dict) -> tuple:
+    root_devices = {}
+    root_links = []
+    for memdev in list_cxl_devices():
+        if not re.match(r'mem[0-9]+', memdev):
+            continue
+        node = int(subprocess.getoutput('cat /sys/bus/cxl/devices/{}/numa_node'.format(memdev)))
+        node = node if node != -1 else 0
+        if 'root{}'.format(node) not in root_devices:
+            root_devices['root{}'.format(node)] = {
+                'type': 'root',
+                'links': set(),
+                'parent': set()
+            }
+        root_links.append(('root{}'.format(node), memdev))
+    
+    for root_device in root_devices.keys():
+        associated_numa_device_name = 'node{}'.format(
+            re.search(r'\d+', root_device).group()
+        )
+        root_links.append((associated_numa_device_name, root_device))
+    graph.update(root_devices)
+    for link in root_links:
+        graph[link[0]]['links'].add(link[1])
+        graph[link[1]]['parent'].add(link[0])
+
+def generate_mem_dax_links(graph) -> list:
+        new_links = set()
+        decoder_dax_mapping = {
+                re.findall(r'decoder[0-9]+.[0-9]+', dax_device['path'])[0]: dax_device['devices']
+                for dax_device in daxctl_list_dr()
+            }
+        for bus in cxl_list_verbose():
+            for decoder in bus['decoders:{}'.format(bus['bus'])]:
+                try:
+                    for region in decoder['regions:{}'.format(decoder['decoder'])]:
+                        new_links.add((region['mappings'][0]['memdev'], decoder_dax_mapping[decoder['decoder']][0]['chardev']))
+                except: continue
+        for link in new_links:
+            graph[link[0]]['links'].add(link[1])
+            graph[link[1]]['parent'].add(link[0])
+
+
+def get_memdev_serial(memdev_name):
+    file_path = f"/sys/bus/cxl/devices/{memdev_name}/serial"
+    with open(file_path, "r") as file:
+        serial_number = file.read().strip()
+    return str(int(serial_number, 16))
+
+
+def list_cxl_devices() -> list:
+    out = subprocess.getoutput('ls /sys/bus/cxl/devices/')
+    if "No such file or directory" in out:
+        print('Warning: Couldn\'t access CXL directory')
+        return []
+    return out.split("\n")
+
+def cxl_list_verbose():
+    return json.loads(subprocess.getoutput("{} list -vvvv".format(cxl_cmd)))
+
+def daxctl_list_dr():
+    return json.loads(subprocess.getoutput("{} list -DR".format(dax_cmd)))
 
                         
 print(generate_topology())
