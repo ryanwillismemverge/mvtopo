@@ -53,7 +53,9 @@ def generate_dax_devices(graph: dict):
                 "parent": set(),
                 "target_node": target_node, 
                 "numa_node": numa_node
-                }    
+                }
+            if target_node >= 1:
+                graph[item]['links'].add(f'node{target_node}')
     return devices
 
 
@@ -66,7 +68,8 @@ def generate_cxl_devices(graph: dict):
                 'type': 'cxl',
                 'serial': get_memdev_serial(item),
                 'links': set(),
-                'parent': set()
+                'parent': set(),
+                'health': get_memdev_health(item)
             }
             memdev.update(parse_lstopo_output(item))
             graph[item] =  memdev
@@ -127,6 +130,8 @@ def parse_lstopo_output(memdev):
             host_bridge_match = re.search(r'(HostBridge L#)(\d+)', line)
             if host_bridge_match:
                 host_bridge_info.append(int(host_bridge_match.group(2)))
+        if "PCIVendor" in line:
+            info_dict['vendor'] = re.search(r'PCIVendor="([^"]+)', line).group(1)   
     info_dict['host_bridge'] = host_bridge_info
     return info_dict
 
@@ -178,6 +183,17 @@ def get_memdev_serial(memdev_name):
     with open(file_path, "r") as file:
         serial_number = file.read().strip()
     return str(int(serial_number, 16))
+
+def get_memdev_health(memdev):
+    output = subprocess.getoutput(f'{cxl_cmd} list -H')
+    data = json.loads(output)
+
+    for device in data:
+        if 'memdevs' in device:
+            for memdev in device['memdevs']:
+                if memdev['memdev'] == memdev:
+                    return memdev['health']
+    return None
 
 
 def list_cxl_devices() -> list:
