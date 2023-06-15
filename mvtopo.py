@@ -13,7 +13,6 @@ def generate_topology() -> dict:
     generate_cxl_devices(graph)
     generate_root_devices(graph)
     generate_mem_dax_links(graph)
-    # ....
     return graph
 
 def generate_numa_nodes(graph: dict):
@@ -56,6 +55,7 @@ def generate_dax_devices(graph: dict):
                 }
             if target_node >= 1:
                 graph[item]['links'].add(f'node{target_node}')
+                graph[f'node{target_node}']['parent'].add(item)
     return devices
 
 
@@ -111,29 +111,6 @@ def find_lstopo_parents(device):
     parents.reverse()
     
     return parents
-
-
-
-def parse_lstopo_output(memdev):
-    lstopo_output = find_lstopo_parents(memdev)
-    info_dict = {}
-    host_bridge_info = []
-    for line in lstopo_output:
-        if "CXLMem" in line:
-            size_match = re.search(r'(CXLRAMSize=)(\d+)', line)
-            if size_match:
-                info_dict['device_ram_size'] = int(size_match.group(2))
-            slot_match = re.search(r'(PCISlot=)(\d+)', line)
-            if slot_match:
-                info_dict['PCIe_slot_number'] = int(slot_match.group(2))
-        if "HostBridge" in line:
-            host_bridge_match = re.search(r'(HostBridge L#)(\d+)', line)
-            if host_bridge_match:
-                host_bridge_info.append(int(host_bridge_match.group(2)))
-        if "PCIVendor" in line:
-            info_dict['vendor'] = re.search(r'PCIVendor="([^"]+)', line).group(1)   
-    info_dict['host_bridge'] = host_bridge_info
-    return info_dict
 
 def generate_root_devices(graph: dict) -> tuple:
     root_devices = {}
@@ -208,6 +185,27 @@ def cxl_list_verbose():
 
 def daxctl_list_dr():
     return json.loads(subprocess.getoutput("{} list -DR".format(dax_cmd)))
+
+def parse_lstopo_output(memdev):
+    lstopo_output = find_lstopo_parents(memdev)
+    info_dict = {}
+    host_bridge_info = []
+    for line in lstopo_output:
+        if "CXLMem" in line:
+            size_match = re.search(r'(CXLRAMSize=)(\d+)', line)
+            if size_match:
+                info_dict['device_ram_size'] = int(size_match.group(2))
+            slot_match = re.search(r'(PCISlot=)(\d+)', line)
+            if slot_match:
+                info_dict['PCIe_slot_number'] = int(slot_match.group(2))
+        if "HostBridge" in line:
+            host_bridge_match = re.search(r'(HostBridge L#)(\d+)', line)
+            if host_bridge_match:
+                host_bridge_info.append(int(host_bridge_match.group(2)))
+        if "PCIVendor" in line:
+            info_dict['vendor'] = re.search(r'PCIVendor="([^"]+)', line).group(1)   
+    info_dict['host_bridge'] = host_bridge_info
+    return info_dict
 
                         
 print(generate_topology())
