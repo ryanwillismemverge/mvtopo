@@ -2,6 +2,7 @@ import subprocess
 import os
 import re
 import json
+import copy
 
 cxl_cmd = '~/ndctl/build/cxl/cxl'
 dax_cmd = '~/ndctl/build/daxctl/daxctl'
@@ -11,9 +12,35 @@ def generate_topology() -> dict:
     generate_numa_nodes(graph)
     generate_dax_devices(graph)
     generate_cxl_devices(graph)
-    generate_root_devices(graph)
+    generate_socket_devices(graph)
+    generate_root_devices(graph) 
     generate_mem_dax_links(graph)
     return graph
+
+def format_topology():
+    def recurse(nodes, node_id, link_types):
+        node = nodes[node_id]
+        if 'links' in node:
+            for link_id in node['links']:
+                link = nodes[link_id]
+                link_type = link['type']
+                if link_type not in node:
+                    node[link_type] = {}
+                node[link_type][link_id] = link
+                if link_id not in link_types:
+                    link_types.add(link_id)
+                    recurse(nodes, link_id, link_types)
+            del node['links']
+            
+    topology = generate_topology()
+    new_topology = {"sockets": {}}
+    
+    for id, properties in topology.items():
+        if properties['type'] == 'socket':
+            new_topology['sockets'][id] = properties
+            recurse(topology, id, set())
+            
+    return new_topology
 
 def generate_numa_nodes(graph: dict):
     node_dir = "/sys/devices/system/node/"
@@ -58,21 +85,66 @@ def generate_dax_devices(graph: dict):
                 graph[f'node{target_node}']['parent'].add(item)
     return devices
 
-
 def generate_cxl_devices(graph: dict):
+    methods = [generate_cxl_devices_cxlctl, generate_cxl_devices_sysfs]
+    success = False
+    exceptions = []
+    for func in methods:
+        graph_copy = copy.deepcopy(graph)
+        try:
+            if func(graph_copy):
+                success = True
+                break
+        except Exception as e:
+            exceptions.append(e)
+            
+    if success:
+        graph.update(graph_copy)
+    else:
+        raise Exception(f'Couldn\'t generate CXL devices: {str(exceptions)}')
+    
+
+def generate_cxl_devices_cxlctl(graph: dict):
+    for memdev in cxl_list_memdevs():
+        device_health = memdev['health'] if 'health' in memdev else None
+        device = {
+            'type': 'cxl',
+            'serial': str(memdev['serial']),
+            'links': set(),
+            'parent': set(),
+            'device_ram_size': memdev['ram_size'] // (1024 * 1024),
+            'health': device_health
+        }
+        device.update(parse_lstopo_output(memdev['memdev']))
+        graph[memdev['memdev']] = device
+    return True
+
+
+def generate_cxl_devices_sysfs(graph: dict) -> int:
+    def get_memdev_ram_size_sysfs(memdev):
+        with open(f"/sys/bus/cxl/devices/{memdev}/ram/size", "r") as file:
+            return int(file.read().strip(), 16) // (1024 * 1024)
+        
+    def get_memdev_serial_sysfs(memdev_name):
+        file_path = f"/sys/bus/cxl/devices/{memdev_name}/serial"
+        with open(file_path, "r") as file:
+            serial_number = file.read().strip()
+        return str(int(serial_number, 16))
+        
     cxl_dir = "/sys/bus/cxl/devices/"
     for item in os.listdir(cxl_dir):
         if 'mem' in item:
-            # Use lstopo-no-graphic
             memdev = {
                 'type': 'cxl',
-                'serial': get_memdev_serial(item),
+                'serial': get_memdev_serial_sysfs(item),
                 'links': set(),
                 'parent': set(),
-                'health': get_memdev_health(item)
+                'device_ram_size': get_memdev_ram_size_sysfs(item),
+                'health': None
             }
             memdev.update(parse_lstopo_output(item))
             graph[item] =  memdev
+    return True
             
 
 
@@ -129,7 +201,7 @@ def generate_root_devices(graph: dict) -> tuple:
         root_links.append(('root{}'.format(node), memdev))
     
     for root_device in root_devices.keys():
-        associated_numa_device_name = 'node{}'.format(
+        associated_numa_device_name = 'socket{}'.format(
             re.search(r'\d+', root_device).group()
         )
         root_links.append((associated_numa_device_name, root_device))
@@ -153,24 +225,34 @@ def generate_mem_dax_links(graph) -> list:
         for link in new_links:
             graph[link[0]]['links'].add(link[1])
             graph[link[1]]['parent'].add(link[0])
+            
+def generate_socket_devices(graph: dict):
+    for numa_node, cpu_list in find_socket_nodes().items():
+        node_num = int(numa_node.lstrip("node"))
+        socket_device = {
+                'type': 'socket',
+                'links': {numa_node},
+                'parent': set(),
+                'cpus': cpu_list,
+                'dram': get_numa_node_size(numa_node)
+        }
+        graph[numa_node]['parent'].add(f'socket{node_num}')
+        graph[f'socket{node_num}'] = socket_device
+        
 
 
-def get_memdev_serial(memdev_name):
-    file_path = f"/sys/bus/cxl/devices/{memdev_name}/serial"
-    with open(file_path, "r") as file:
-        serial_number = file.read().strip()
-    return str(int(serial_number, 16))
+def find_socket_nodes():
+    output = subprocess.check_output(['numactl', '-H'], universal_newlines=True)
 
-def get_memdev_health(memdev):
-    output = subprocess.getoutput(f'{cxl_cmd} list -H')
-    data = json.loads(output)
+    node_pattern = re.compile(r'node\s+(\d+)\s+cpus:\s+([\d\s]+)')
+    nodes = {}
+    for match in node_pattern.finditer(output):
+        node_id = match.group(1)
+        cpus = [int(cpu) for cpu in match.group(2).split()]
+        nodes[f'node{node_id}'] = cpus
 
-    for device in data:
-        if 'memdevs' in device:
-            for memdev in device['memdevs']:
-                if memdev['memdev'] == memdev:
-                    return memdev['health']
-    return None
+    return nodes
+
 
 
 def list_cxl_devices() -> list:
@@ -180,32 +262,45 @@ def list_cxl_devices() -> list:
         return []
     return out.split("\n")
 
+def cxl_list_memdevs():
+    return json.loads(subprocess.getoutput("{} list -MH".format(cxl_cmd)))
+
 def cxl_list_verbose():
     return json.loads(subprocess.getoutput("{} list -vvvv".format(cxl_cmd)))
 
 def daxctl_list_dr():
     return json.loads(subprocess.getoutput("{} list -DR".format(dax_cmd)))
 
+def get_numa_node_size(node_name: str) -> int:
+    with open(f"/sys/devices/system/node/{node_name}/meminfo", 'r') as file:
+        for line in file:
+            if "MemTotal" in line:
+                return int(line.split()[3]) // 1024
+
 def parse_lstopo_output(memdev):
-    lstopo_output = find_lstopo_parents(memdev)
-    info_dict = {}
-    host_bridge_info = []
-    for line in lstopo_output:
-        if "CXLMem" in line:
-            size_match = re.search(r'(CXLRAMSize=)(\d+)', line)
-            if size_match:
-                info_dict['device_ram_size'] = int(size_match.group(2))
-            slot_match = re.search(r'(PCISlot=)(\d+)', line)
-            if slot_match:
-                info_dict['PCIe_slot_number'] = int(slot_match.group(2))
-        if "HostBridge" in line:
-            host_bridge_match = re.search(r'(HostBridge L#)(\d+)', line)
-            if host_bridge_match:
-                host_bridge_info.append(int(host_bridge_match.group(2)))
-        if "PCIVendor" in line:
-            info_dict['vendor'] = re.search(r'PCIVendor="([^"]+)', line).group(1)   
-    info_dict['host_bridge'] = host_bridge_info
-    return info_dict
+    try:
+        lstopo_output = find_lstopo_parents(memdev)
+        info_dict = {}
+        host_bridge_info = []
+        for line in lstopo_output:
+            if "CXLMem" in line:
+                slot_match = re.search(r'(PCISlot=)(\d+)', line)
+                if slot_match:
+                    info_dict['PCIe_slot_number'] = int(slot_match.group(2))
+            if "HostBridge" in line:
+                host_bridge_match = re.search(r'(HostBridge L#)(\d+)', line)
+                if host_bridge_match:
+                    host_bridge_info.append(int(host_bridge_match.group(2)))
+            if "PCIVendor" in line:
+                info_dict['vendor'] = re.search(r'PCIVendor="([^"]+)', line).group(1)   
+        info_dict['host_bridge'] = host_bridge_info
+        return info_dict
+    except:
+        return {
+            'PCIe_slot_number': None,
+            'host_bridge': None,
+            'vendor': None
+        }
 
                         
-print(generate_topology())
+print(format_topology())
