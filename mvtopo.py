@@ -38,7 +38,10 @@ def main():
 
     args = parser.parse_args()
 
-    print(json.dumps(generate_topology(args.links), indent=4, cls=SetEncoder))
+    if args.logical_mode:
+        print(json.dumps(generate_topology(args.links), indent=4, cls=SetEncoder))
+    else:
+        print(json.dumps(format_topology(args.links), indent=4, cls=SetEncoder))
     
 def generate_topology(manual_links: list|None) -> dict:
     graph = {}
@@ -51,7 +54,7 @@ def generate_topology(manual_links: list|None) -> dict:
     generate_memory_topology(graph)
     return graph
 
-def format_topology():
+def format_topology(manual_links: list|None):
     def recurse(nodes, node_id, link_types):
         node = nodes[node_id]
         if 'links' in node:
@@ -66,7 +69,7 @@ def format_topology():
                     recurse(nodes, link_id, link_types)
             del node['links']
             
-    topology = generate_topology()
+    topology = generate_topology(manual_links)
     new_topology = {"sockets": {}}
     
     for id, properties in topology.items():
@@ -241,7 +244,7 @@ def generate_root_devices(graph: dict) -> tuple:
         node = node if node != -1 else 0
         if 'root{}'.format(node) not in root_devices:
             root_devices['root{}'.format(node)] = {
-                'type': 'root',
+                'type': 'cxl_root_decoder',
                 'links': set(),
                 'parent': set()
             }
@@ -295,19 +298,6 @@ def generate_socket_devices(graph: dict):
                 if socket_device['cpu_info'] is None:
                     socket_device['cpu_info'] = get_cpu_info(node[4:])
         graph[socket_name] = socket_device
-        
-    # for numa_node, cpu_list in find_socket_nodes().items():
-    #     node_num = int(numa_node.lstrip("node"))
-    #     socket_device = {
-    #             'type': 'socket',
-    #             'links': {numa_node},
-    #             'parent': set(),
-    #             'cpus': cpu_list,
-    #             'cpu_info': get_cpu_info(node_num),
-    #             'dram': []
-    #     }
-    #     graph[numa_node]['parent'].add(f'socket{node_num}')
-    #     graph[f'socket{node_num}'] = socket_device
         
 def generate_memory_topology(graph):
     mem_info = get_memory_info()
@@ -414,25 +404,6 @@ def get_cpu_info(socket_number):
             cpu_info_dict["Core(s) per socket"] = int(line.split(":")[1].strip())
         if line[:7] == 'CPU(s):':
             cpu_info_dict["CPU(s)"] = line.split(":")[1].strip()
-
-    # lscpu -p provides detailed info about each CPU
-    lscpu_p_output = subprocess.check_output("lscpu -p", shell=True).decode('utf-8').split("\n")
-
-    # We create a dictionary with the socket numbers as keys and the values are sets of NUMA nodes
-    # By using a set, we automatically remove duplicates, so we get the unique NUMA nodes for each socket
-    socket_numa_nodes = defaultdict(set)
-    socket_cores = defaultdict(set)
-
-    # for line in lscpu_p_output:
-    #     # Skip comments and empty lines
-    #     if not line.startswith("#") and line.strip() != "":
-    #         cpu, core, socket, node = map(int, line.split(",")[:4])
-    #         # Add node to the corresponding socket set
-    #         socket_numa_nodes[socket].add(node)
-    #         socket_cores[socket].add(core)
-
-    # cpu_info_dict["CPU(s)"] = len(socket_cores[socket_number]) * int(cpu_info_dict["Thread(s) per core"])
-
     return cpu_info_dict
 
 def parse_lstopo_output(memdev):
