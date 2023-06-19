@@ -15,6 +15,7 @@ def generate_topology() -> dict:
     generate_socket_devices(graph)
     generate_root_devices(graph) 
     generate_mem_dax_links(graph)
+    generate_memory_topology(graph)
     return graph
 
 def format_topology():
@@ -234,11 +235,30 @@ def generate_socket_devices(graph: dict):
                 'links': {numa_node},
                 'parent': set(),
                 'cpus': cpu_list,
-                'dram': get_numa_node_size(numa_node)
+                'dram': []
         }
         graph[numa_node]['parent'].add(f'socket{node_num}')
         graph[f'socket{node_num}'] = socket_device
         
+def generate_memory_topology(graph):
+    mem_info = get_memory_info()
+    dualsocket_pattern = r'P\d+_Node\d+_Channel\w+_Dimm\d+'
+    singlesocket_pattern = r'^P0 CHANNEL [A-Z]$'
+    mem_topo = {}
+    for handle in mem_info:
+        socket = None
+        if re.match(dualsocket_pattern, handle['Bank Locator']):
+            pattern = r'P(\d+)_Node(\d+)'
+            match = re.search(pattern, handle['Bank Locator'])
+            if match:
+                socket = int(match.group(1))
+        elif re.match(singlesocket_pattern, handle['Bank Locator']):
+            socket = 0
+            
+        if socket is not None:
+            graph[f'socket{socket}']['dram'].append(handle)
+        else:
+            continue
 
 
 def find_socket_nodes():
@@ -253,6 +273,33 @@ def find_socket_nodes():
 
     return nodes
 
+def get_memory_info():
+    cmd_output = subprocess.check_output("sudo dmidecode -t memory", shell=True).decode('utf-8')
+    memory_info = cmd_output.split("\n")
+
+    modules = []
+    module_info = {}
+    handle = None
+    for line in memory_info:
+        if "Handle" in line:
+            handle = line.split(',')[0].split()[-1]
+        if "Memory Device" in line and handle:
+            module_info = {"Handle": handle}
+        if "Size:" in line and "Handle" in module_info:
+            size = line.split(":")[1].strip()
+            module_info["Size"] = size if "No" not in size else "0GB"
+        if "Bank Locator:" in line and "Handle" in module_info:
+            module_info["Bank Locator"] = line.split(":", 1)[1].strip()
+        if "Speed:" in line and "Handle" in module_info:
+            module_info["Speed"] = line.split(":", 1)[1].strip()
+        if "Manufacturer:" in line and "Handle" in module_info:
+            module_info["Manufacturer"] = line.split(":", 1)[1].strip()
+        if "Size" in module_info and "Speed" in module_info and "Bank Locator" in module_info and "Manufacturer" in module_info:
+            modules.append(module_info)
+            module_info = {}
+            handle = None
+    
+    return modules
 
 
 def list_cxl_devices() -> list:
