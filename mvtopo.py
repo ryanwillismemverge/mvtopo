@@ -3,11 +3,44 @@ import os
 import re
 import json
 import copy
+from collections import defaultdict
+import argparse
 
 cxl_cmd = '~/ndctl/build/cxl/cxl'
 dax_cmd = '~/ndctl/build/daxctl/daxctl'
 
-def generate_topology() -> dict:
+class SetEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, set):
+            return list(obj)
+        return super().default(obj)
+
+def link_type(arg):
+    pairs = arg.split(";")
+    links = []
+    for pair in pairs:
+        items = pair.split(",")
+        if len(items) != 2:
+            raise argparse.ArgumentTypeError("Link should be a pair of two strings separated by a comma.")
+        links.append(tuple(items))
+    return links
+
+def main():
+    parser = argparse.ArgumentParser(description='Process some inputs.')
+    
+    # Optional argument for links
+    parser.add_argument('-l', '--links', type=link_type, 
+                        help='Specify manual links between two items in the graph by name. Each link should be a pair of two strings separated by a comma. Separate different links by semicolon.')
+    
+    # Optional argument for logical mode
+    parser.add_argument('-m', '--logical_mode', action='store_true',
+                        help='Specify that you want the graph output in logical mode')
+
+    args = parser.parse_args()
+
+    print(json.dumps(generate_topology(args.links), indent=4, cls=SetEncoder))
+    
+def generate_topology(manual_links: list|None) -> dict:
     graph = {}
     generate_numa_nodes(graph)
     generate_dax_devices(graph)
@@ -43,10 +76,14 @@ def format_topology():
             
     return new_topology
 
+import os
+import re
+
 def generate_numa_nodes(graph: dict):
     node_dir = "/sys/devices/system/node/"
     for item in os.listdir(node_dir):
         if "node" in item:
+            # Process meminfo file
             meminfo_file = os.path.join(node_dir, item, "meminfo")
             if os.path.exists(meminfo_file):
                 with open(meminfo_file, 'r') as file:
@@ -55,12 +92,21 @@ def generate_numa_nodes(graph: dict):
                     if mem_total_re:
                         mem_total_kb = int(mem_total_re.group(1))
                         mem_total_mb = mem_total_kb // 1024
-                        graph[item] = {
-                            'type': 'numa',
-                            'size_mb': mem_total_mb,
-                            'links': set(),
-                            'parent': set()
-                        }
+
+            cpuinfo_file = os.path.join(node_dir, item, "cpulist")
+            cpu_list = []
+            if os.path.exists(cpuinfo_file):
+                with open(cpuinfo_file, 'r') as file:
+                    cpu_info = file.read().strip() # remove newline at the end
+                    cpu_list = parse_cpu_list(cpu_info) if len(cpu_info) > 0 else []
+                         
+            graph[item] = {
+                'type': 'numa',
+                'size_mb': mem_total_mb,
+                'links': set(),
+                'parent': set(),
+                'cpus': cpu_list
+            }
                         
 def generate_dax_devices(graph: dict):
     dax_dir = "/sys/bus/dax/devices/"
@@ -212,6 +258,7 @@ def generate_root_devices(graph: dict) -> tuple:
         graph[link[1]]['parent'].add(link[0])
 
 def generate_mem_dax_links(graph) -> list:
+    try:
         new_links = set()
         decoder_dax_mapping = {
                 re.findall(r'decoder[0-9]+.[0-9]+', dax_device['path'])[0]: dax_device['devices']
@@ -226,19 +273,41 @@ def generate_mem_dax_links(graph) -> list:
         for link in new_links:
             graph[link[0]]['links'].add(link[1])
             graph[link[1]]['parent'].add(link[0])
+    except Exception:
+        print("Couldn't auto-generate cxl<->dax links. Please specify links manually")
             
 def generate_socket_devices(graph: dict):
-    for numa_node, cpu_list in find_socket_nodes().items():
-        node_num = int(numa_node.lstrip("node"))
+    for socket_name, node_list in get_socket_nodes().items():
         socket_device = {
-                'type': 'socket',
-                'links': {numa_node},
-                'parent': set(),
-                'cpus': cpu_list,
-                'dram': []
+            'type': 'socket',
+            'links': set(),
+            'parent': set(),
+            'cpus': [],
+            'cpu_info': None,
+            'dram': []
         }
-        graph[numa_node]['parent'].add(f'socket{node_num}')
-        graph[f'socket{node_num}'] = socket_device
+        for node in node_list:
+            cpus = get_node_cpus(node)
+            if len(cpus) > 0:
+                socket_device['links'].add(node)
+                graph[node]['parent'].add(socket_name)
+                socket_device['cpus'] += cpus
+                if socket_device['cpu_info'] is None:
+                    socket_device['cpu_info'] = get_cpu_info(node[4:])
+        graph[socket_name] = socket_device
+        
+    # for numa_node, cpu_list in find_socket_nodes().items():
+    #     node_num = int(numa_node.lstrip("node"))
+    #     socket_device = {
+    #             'type': 'socket',
+    #             'links': {numa_node},
+    #             'parent': set(),
+    #             'cpus': cpu_list,
+    #             'cpu_info': get_cpu_info(node_num),
+    #             'dram': []
+    #     }
+    #     graph[numa_node]['parent'].add(f'socket{node_num}')
+    #     graph[f'socket{node_num}'] = socket_device
         
 def generate_memory_topology(graph):
     mem_info = get_memory_info()
@@ -294,6 +363,8 @@ def get_memory_info():
             module_info["Speed"] = line.split(":", 1)[1].strip()
         if "Manufacturer:" in line and "Handle" in module_info:
             module_info["Manufacturer"] = line.split(":", 1)[1].strip()
+        if "Locator:" in line and "Bank Locator" not in line and "Handle" in module_info:
+            module_info["Locator"] = line.split(":", 1)[1].strip()
         if "Size" in module_info and "Speed" in module_info and "Bank Locator" in module_info and "Manufacturer" in module_info:
             modules.append(module_info)
             module_info = {}
@@ -323,6 +394,46 @@ def get_numa_node_size(node_name: str) -> int:
         for line in file:
             if "MemTotal" in line:
                 return int(line.split()[3]) // 1024
+            
+def get_cpu_info(socket_number):
+    cpu_info_dict = {}
+
+    # Run the lscpu command and split the output into lines
+    lscpu_output = subprocess.check_output("lscpu", shell=True).decode('utf-8').split("\n")
+    
+    for line in lscpu_output:
+        if "Architecture:" in line:
+            cpu_info_dict["Architecture"] = line.split(":")[1].strip()
+        if "Model name:" in line and "BIOS Model name" not in line:
+            cpu_info_dict["Model name"] = line.split(":")[1].strip()
+        if "Thread(s) per core:" in line:
+            cpu_info_dict["Thread(s) per core"] = int(line.split(":")[1].strip())
+        if "On-line CPU(s) list:" in line:
+            cpu_info_dict["On-line CPU(s) list"] = parse_cpu_list(line.split(":")[1].strip())
+        if "Core(s) per socket" in line:
+            cpu_info_dict["Core(s) per socket"] = int(line.split(":")[1].strip())
+        if line[:7] == 'CPU(s):':
+            cpu_info_dict["CPU(s)"] = line.split(":")[1].strip()
+
+    # lscpu -p provides detailed info about each CPU
+    lscpu_p_output = subprocess.check_output("lscpu -p", shell=True).decode('utf-8').split("\n")
+
+    # We create a dictionary with the socket numbers as keys and the values are sets of NUMA nodes
+    # By using a set, we automatically remove duplicates, so we get the unique NUMA nodes for each socket
+    socket_numa_nodes = defaultdict(set)
+    socket_cores = defaultdict(set)
+
+    # for line in lscpu_p_output:
+    #     # Skip comments and empty lines
+    #     if not line.startswith("#") and line.strip() != "":
+    #         cpu, core, socket, node = map(int, line.split(",")[:4])
+    #         # Add node to the corresponding socket set
+    #         socket_numa_nodes[socket].add(node)
+    #         socket_cores[socket].add(core)
+
+    # cpu_info_dict["CPU(s)"] = len(socket_cores[socket_number]) * int(cpu_info_dict["Thread(s) per core"])
+
+    return cpu_info_dict
 
 def parse_lstopo_output(memdev):
     try:
@@ -348,6 +459,50 @@ def parse_lstopo_output(memdev):
             'host_bridge': None,
             'vendor': None
         }
+        
+def get_socket_nodes():
+    command = 'lstopo-no-graphics'
+    output = subprocess.getoutput(command)
+
+    socket_nodes = {}
+    current_socket = None
+
+    for line in output.split('\n'):
+        if 'Package L#' in line:
+            current_socket = line.split('Package L#')[1].split()[0]
+            socket_key = f'socket{current_socket}'
+            socket_nodes[socket_key] = []
+        elif 'NUMANode L#' in line:
+            node_num = line.split('P#')[1].split()[0]
+            socket_nodes[socket_key].append(f'node{node_num}')
+
+    return socket_nodes
+
+def get_node_cpus(node_name):
+    node_id = int(node_name[4:])
+    numactl_output = subprocess.getoutput('numactl -H')
+    numactl_lines = numactl_output.split('\n')
+    cpus_list = []
+
+    for line in numactl_lines:
+        if line.startswith(f"node {node_id} cpus"):
+            cpus_list = line.split(':')[1].strip().split(' ')
+            break
+    return [int(cpu) for cpu in cpus_list] if '' not in cpus_list else []
+
+def parse_cpu_list(online_cpu_list):
+    cpus = []
+    ranges = online_cpu_list.split(',')
+
+    for cpu_range in ranges:
+        if '-' in cpu_range:
+            start, end = map(int, cpu_range.split('-'))
+            cpus.extend(range(start, end + 1))
+        else:
+            cpus.append(int(cpu_range))
+
+    return cpus
 
                         
-print(format_topology())
+if __name__ == "__main__":
+    main()
