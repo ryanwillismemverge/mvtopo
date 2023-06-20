@@ -52,9 +52,12 @@ def generate_topology(manual_links: list|None) -> dict:
     generate_root_devices(graph) 
     generate_mem_dax_links(graph)
     generate_memory_topology(graph)
+    generate_manual_links(graph, manual_links)
     return graph
 
 def format_topology(manual_links: list|None):
+    if manual_links is None:
+        manual_links = []
     def recurse(nodes, node_id, link_types):
         node = nodes[node_id]
         if 'links' in node:
@@ -296,14 +299,16 @@ def generate_socket_devices(graph: dict):
                 graph[node]['parent'].add(socket_name)
                 socket_device['cpus'] += cpus
                 if socket_device['cpu_info'] is None:
-                    socket_device['cpu_info'] = get_cpu_info(node[4:])
+                    socket_device['cpu_info'] = get_cpu_info()
+        socket_device['cpu_info']['On-line CPU(s) list'] = [
+            cpu for cpu in socket_device['cpu_info']['On-line CPU(s) list'] if cpu in socket_device['cpus']
+        ]
         graph[socket_name] = socket_device
         
 def generate_memory_topology(graph):
     mem_info = get_memory_info()
     dualsocket_pattern = r'P\d+_Node\d+_Channel\w+_Dimm\d+'
     singlesocket_pattern = r'^P0 CHANNEL [A-Z]$'
-    mem_topo = {}
     for handle in mem_info:
         socket = None
         if re.match(dualsocket_pattern, handle['Bank Locator']):
@@ -318,6 +323,14 @@ def generate_memory_topology(graph):
             graph[f'socket{socket}']['dram'].append(handle)
         else:
             continue
+        
+def generate_manual_links(graph, manual_links):
+    for (link_from, link_to) in manual_links: 
+        try:
+            graph[link_from]['links'].append(link_to)
+            graph[link_to]['parent'].append(link_from)
+        except Exception as e:
+            print(f'Couldn\'t manually link {link_from} -> {link_to}')
 
 
 def find_socket_nodes():
@@ -385,7 +398,7 @@ def get_numa_node_size(node_name: str) -> int:
             if "MemTotal" in line:
                 return int(line.split()[3]) // 1024
             
-def get_cpu_info(socket_number):
+def get_cpu_info():
     cpu_info_dict = {}
 
     # Run the lscpu command and split the output into lines
