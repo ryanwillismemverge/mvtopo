@@ -23,7 +23,7 @@ def link_type(arg):
     return links
 
 def main():
-    parser = argparse.ArgumentParser(description='Process some inputs.')
+    parser = argparse.ArgumentParser(description='MemVerge Topology Generator')
     
     # Optional argument for links
     parser.add_argument('-l', '--links', type=link_type, 
