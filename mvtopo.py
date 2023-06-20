@@ -314,8 +314,8 @@ def generate_memory_topology(graph):
 def generate_manual_links(graph, manual_links):
     for (link_from, link_to) in manual_links: 
         try:
-            graph[link_from]['links'].append(link_to)
-            graph[link_to]['parent'].append(link_from)
+            graph[link_from]['links'].add(link_to)
+            graph[link_to]['parent'].add(link_from)
         except Exception as e:
             print(f'Couldn\'t manually link {link_from} -> {link_to}')
             
