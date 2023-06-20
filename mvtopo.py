@@ -6,9 +6,6 @@ import copy
 from collections import defaultdict
 import argparse
 
-cxl_cmd = '~/ndctl/build/cxl/cxl'
-dax_cmd = '~/ndctl/build/daxctl/daxctl'
-
 class SetEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, set):
@@ -31,12 +28,23 @@ def main():
     # Optional argument for links
     parser.add_argument('-l', '--links', type=link_type, 
                         help='Specify manual links between two items in the graph by name. Each link should be a pair of two strings separated by a comma. Separate different links by semicolon.')
-    
+
     # Optional argument for logical mode
     parser.add_argument('-m', '--logical_mode', action='store_true',
                         help='Specify that you want the graph output in logical mode')
 
+    # Optional arguments for cxl_cmd and dax_cmd
+    parser.add_argument('--cxl_cmd', type=str, default='cxl', 
+                        help='Command for cxl, default is "cxl"')
+    
+    parser.add_argument('--dax_cmd', type=str, default='daxctl', 
+                        help='Command for daxctl, default is "daxctl"')
+
     args = parser.parse_args()
+    global cxl_cmd
+    global dax_cmd
+    cxl_cmd = args.cxl_cmd
+    dax_cmd = args.dax_cmd
 
     if args.logical_mode:
         print(json.dumps(generate_topology(args.links), indent=4, cls=SetEncoder))
