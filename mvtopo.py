@@ -348,7 +348,8 @@ def generate_cxl_devices(graph: dict, spoof: list|None):
     if success:
         graph.update(graph_copy)
     else:
-        raise Exception(f'Couldn\'t generate CXL devices: {str(exceptions)}')
+        debug_print(f'Couldn\'t generate CXL devices: {str(exceptions)}')
+        return
 
 def generate_cxl_devices_spoof(graph: dict, spoof: list|None):
     for memdev in spoof:
