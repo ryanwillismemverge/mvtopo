@@ -79,6 +79,15 @@ $ sudo /opt/hwloc/bin/lstopo-no-graphics --version
 lstopo-no-graphics 3.0.0a1-git
 ```
 
+## Update the PATH environment variable
+Temporarily add the full path to the `lstopo-no-graphics` binary to the PATH. Assuming the binaries were installed to `/opt/hwloc`, run:
+```bash
+$ export PATH=/opt/hwloc/bin:$PATH
+$ export LD_LIBRARY_PATH=/opt/hwloc/lib:$LD_LIBRARY_PATH
+$ which lstopo-no-graphics
+/opt/hwloc/bin/lstopo-no-graphics
+```
+
 # Platform Notes
 
 As of July 2013, Linux kernel driver support for associating memory resources (dax devices / NUMA nodes)
