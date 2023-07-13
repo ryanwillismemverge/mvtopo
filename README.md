@@ -14,6 +14,9 @@ options:
                         Each link should be a pair of two strings separated by a comma.
                         Separate different links by semicolon.
                         Example: --links "mem0,node2;mem1,node3"
+  -s SPOOF, --spoof SPOOF
+                        manually add memdev's that are not in the cxl sysfs topology.
+                        Each memdev should be name,serial,size_mb - separate devices by semicolon.
   -m, --logical_mode    Specify that you want the graph output in logical mode
   --cxl_cmd CXL_CMD     Command for cxl, default is "cxl"
   --dax_cmd DAX_CMD     Command for daxctl, default is "daxctl"

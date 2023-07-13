@@ -29,6 +29,16 @@ def link_type(arg):
         links.append(tuple(items))
     return links
 
+def spoof_type(arg):
+    triplets = arg.split(";")
+    spoofs = []
+    for triplet in triplets:
+        items = triplet.split(",")
+        if len(items) != 3:
+            raise argparse.ArgumentTypeError("Spoofed memdevs should be triplets of name,serial,size_mb.")
+        spoofs.append(items)
+    return spoofs
+
 def main():
     parser = argparse.ArgumentParser(description='MemVerge Topology Generator')
     
@@ -39,6 +49,10 @@ def main():
     # Optional argument for logical mode
     parser.add_argument('-m', '--logical_mode', action='store_true',
                         help='Specify that you want the graph output in logical mode')
+
+    # Optional argument for spoofing cxl memory devices
+    parser.add_argument('-s', '--spoof', type=spoof_type, 
+                        help='manually add memdev\'s that are not in the cxl sysfs topology. Each memdev should be name,serial,size_mb - separate different devices by semicolon.')
 
     # Optional arguments for cxl_cmd and dax_cmd
     parser.add_argument('--cxl_cmd', type=str, default='cxl', 
@@ -58,11 +72,11 @@ def main():
     dax_cmd = args.dax_cmd
 
     if args.logical_mode:
-        print(json.dumps(generate_topology(args.links), indent=4, cls=SetEncoder))
+        print(json.dumps(generate_topology(args.links, args.spoof), indent=4, cls=SetEncoder))
     else:
-        print(json.dumps(format_topology(args.links), indent=4, cls=SetEncoder))
+        print(json.dumps(format_topology(args.links, args.spoof), indent=4, cls=SetEncoder))
     
-def generate_topology(manual_links: list|None) -> dict:
+def generate_topology(manual_links: list|None, cxl_spoofs: list|None) -> dict:
     graph = {}
     try:
         generate_numa_nodes(graph)
@@ -73,9 +87,9 @@ def generate_topology(manual_links: list|None) -> dict:
     except Exception:
         debug_print("Error: Couldn't generate DAX devices.")
     try:
-        generate_cxl_devices(graph)
+        generate_cxl_devices(graph, cxl_spoofs)
     except Exception:
-        debug_print("Error: Couldn't generate DAX devices.")
+        debug_print("Error: Couldn't generate CXL devices.")
     try:
         generate_socket_devices(graph)
     except Exception:
@@ -92,7 +106,7 @@ def generate_topology(manual_links: list|None) -> dict:
     generate_manual_links(graph, manual_links)
     return graph
 
-def format_topology(manual_links: list|None):
+def format_topology(manual_links: list|None, cxl_spoofs: list|None):
     manual_links = [] if manual_links is None else manual_links
     if manual_links is None:
         manual_links = []
@@ -110,7 +124,7 @@ def format_topology(manual_links: list|None):
                     recurse(nodes, link_id, link_types)
             del node['links']
             
-    topology = generate_topology(manual_links)
+    topology = generate_topology(manual_links,cxl_spoofs)
     new_topology = {"sockets": {}}
     
     for id, properties in topology.items():
@@ -172,22 +186,39 @@ def generate_dax_devices(graph: dict):
                 graph[f'node{target_node}']['parent'].add(item)
     return devices
 
-def generate_cxl_devices(graph: dict):
+def generate_cxl_devices(graph: dict, spoof: list|None):
     methods = [generate_cxl_devices_cxlctl, generate_cxl_devices_sysfs]
     success = False
     exceptions = []
+    graph_copy = copy.deepcopy(graph)
     for func in methods:
-        graph_copy = copy.deepcopy(graph)
         try:
             if func(graph_copy):
                 success = True
                 break
         except Exception as e:
             exceptions.append(e)
+        graph_copy = copy.deepcopy(graph)
+    if (spoof):
+        success = generate_cxl_devices_spoof(graph, spoof)
     if success:
         graph.update(graph_copy)
     else:
         raise Exception(f'Couldn\'t generate CXL devices: {str(exceptions)}')
+
+def generate_cxl_devices_spoof(graph: dict, spoof: list|None):
+    for memdev in spoof:
+        name,serial,size_mb = memdev
+        device = {
+                'type': 'cxl',
+                'serial': str(serial),
+                'links': set(),
+                'parent': set(),
+                'device_ram_size': str(size_mb),
+                'health': None
+                }
+        graph[name] = device
+    return True
     
 def generate_cxl_devices_cxlctl(graph: dict):
     for memdev in cxl_list_memdevs():
