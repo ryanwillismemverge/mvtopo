@@ -24,49 +24,72 @@ options:
   -d, --debug           debug prints
 ```
 
-First attempt auto-mode `./mvtopo.py -a` and if this doesn't look reasonable, then you will need
-to provide manual linkage and spoofing depending on your specific hardware environment.
+## mvtopo usage
+
+Run in auto-mode using `./mvtopo.py -a > output.json`. 
+
+If this doesn't look reasonable, then you will need to provide manual linkage (`-l`) and spoofing (`-s`), depending on your specific hardware environment.
 
 # Requirements
 
-mvtopo requires hwloc/lstopo 3.x+ to function.
+mvtopo requires:
+- lstopo >= 3.x // CXL Patches were committed in [aa26f2](https://github.com/open-mpi/hwloc/commit/aa26f297b5240425a970d21ecbb3a2a70fca0b95)
+- daxctl
+- cxl-cli (aka 'cxl')
 
-OS: Fedora 36
-Kernel: 6.3.7
+`lstopo` must be build from source as no Linux Distro has version 3.x in their package repository yet. Follow the instructions below to build lstopo from source code.
 
-Requires hwloc 3.0 or later.
-CXL Patches were comitted in https://github.com/open-mpi/hwloc/commit/aa26f297b5240425a970d21ecbb3a2a70fca0b95
+## Install the Prerequisites for lstopo
 
-Install Prerequsites
+On Ubuntu, run:
+```bash
+sudo apt install numactl libnuma1 libnuma-dev libpciaccess-dev libpciaccess0 libxml2 libxml2-dev cpuid libcpuid-dev libpci-dev libpci3
+```
 
-Ubuntu 22.04: sudo apt install numactl libnuma1 libnuma-dev libpciaccess-dev libpciaccess0 libxml2 libxml2-dev cpuid libcpuid-dev libpci-dev libpci3
-Fedora 36: sudo dnf install numactl numactl-libs numactl-devel libpciaccess libpciaccess-devel libxml2 libxml2-devel cpuid libcpuid-devel
-CentOS: sudo yum install numactl numactl-libs numactl-devel libpciaccess libpciaccess-devel libxml2 libxml2-devel cpuid libcpuid-devel
+On Fedora, run
+```bash
+sudo dnf install numactl numactl-libs numactl-devel libpciaccess libpciaccess-devel libxml2 libxml2-devel cpuid libcpuid-devel
+```
 
+On CentOS/RHEL, run
+```bash
+sudo yum install numactl numactl-libs numactl-devel libpciaccess libpciaccess-devel libxml2 libxml2-devel cpuid libcpuid-devel
+```
+
+## Build lstopo
+```bash
 $ git clone https://github.com/open-mpi/hwloc
 $ cd hwloc
 $ ./autogen.sh
 $ ./configure --prefix=/opt/hwloc
 $ make -j all
+```
+
+## Install lstopo (Optional)
+lstopo can be executed from the directory with the source code. Otherwise, it can be installed to /opt/hwloc with:
+```bash
 $ sudo make install
+```
+
+## Check the lstopo version
+Run the following to confirm the version is 3.x
+```bash
 $ sudo /opt/hwloc/bin/lstopo-no-graphics --version
 lstopo-no-graphics 3.0.0a1-git
+```
 
-Optional: set this lstopo-no-graphics to this new version by default
-$ update-alternatives /usr/bin/lstopo-no-graphics lstopo-no-graphics /opt/hwloc/bin/lstopo-no-graphics 0
+# Platform Notes
 
-# Platform Quirks
+As of July 2013, Linux kernel driver support for associating memory resources (dax devices / NUMA nodes)
+and CXL memory devices (/sys/bus/cxl/devices/memN) are broken on some platforms.
 
-As of July 2013, linux kernel driver support for associating memory resources (dax devices / NUMA nodes)
-and CXL memory devices (/sys/bus/cxl/devices/memN) is broken on a some platforms.
-
-In these cases, some manual links must be provided by the user to successfully generate a sane topology.
+In these cases, some manual links must be provided by the user to generate a sane topology successfully.
 
 ## AMD Genoa
 
-On Genoa machines, by default the BIOS will create mappings and numa-nodes for memory expanders.
+On Genoa machines, by default, the BIOS will create mappings and numa-nodes for memory expanders.
 
-This numa-node is created separate from any operating system driver support, meaning that the
+This numa-node is created separately from any operating system driver support, meaning that the
 topology will not associate the memory expander device `/sys/bus/cxl/devices/memN` with the
 numa node containing its memory `/sys/bus/node/devices/nodeY`.
 
@@ -79,18 +102,18 @@ Example: mem0 is associated with numa node 2, and mem1 is associated with numa n
 
 ## Intel Sapphire Rapids
 
-On Sapphire rapids machines, by default, the BIOS will create a dax device associated with the
+On Sapphire Rapids machines, by default, the BIOS will create a dax device associated with the
 memory on a memory expander.  This dax device will not be associated with the memory device
 produced by the kernel driver (similar to AMD Genoa).
 
-If `efi=nosoftreserve` is set in the linux boot options (see `/proc/cmdline`), then a numa
+If `efi=nosoftreserve` is set in the Linux boot options (see `/proc/cmdline`), then a numa
 node will appear instead of a dax device.  In this case, follow the directions for Genoa.
 
 
 In dax mode, to set the memory as usable as general purpose system memory, you must online
 the memory as a numa node manually.
 
-Creating a numa node from dax device:
+Creating a numa node from the DAX device:
 ```
 daxctl reconfigure-device --mode=system-ram dax0.0 
 ```
