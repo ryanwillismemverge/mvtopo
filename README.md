@@ -37,7 +37,8 @@ mvtopo requires:
 - daxctl
 - cxl-cli (aka 'cxl')
 
-`lstopo` must be build from source as no Linux Distro has version 3.x in their package repository yet. Follow the instructions below to build lstopo from source code.
+`lstopo` must be built from source as no Linux Distro has version 3.x in their package repository yet. Follow the instructions below to build lstopo from source code.
+`lstopo` and `lstopo-no-graphics` must be available in the `PATH` environment variable. i.e.: `which lstopo-no-graphics` should return the full path to the binary.
 
 ## Install the Prerequisites for lstopo
 
