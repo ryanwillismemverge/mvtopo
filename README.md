@@ -17,11 +17,15 @@ options:
   -s SPOOF, --spoof SPOOF
                         manually add memdev's that are not in the cxl sysfs topology.
                         Each memdev should be name,serial,size_mb - separate devices by semicolon.
+  -a, --auto            Run an analyzer that attempts to auto-generate links and spoofs
   -m, --logical_mode    Specify that you want the graph output in logical mode
   --cxl_cmd CXL_CMD     Command for cxl, default is "cxl"
   --dax_cmd DAX_CMD     Command for daxctl, default is "daxctl"
   -d, --debug           debug prints
 ```
+
+First attempt auto-mode `./mvtopo.py -a` and if this doesn't look reasonable, then you will need
+to provide manual linkage and spoofing depending on your specific hardware environment.
 
 # Requirements
 
@@ -97,7 +101,6 @@ Example: dax0.0 is associated with mem0, dax1.0 is associated with mem1
 ```
 ./mvtopo.py --links="mem0,dax0.0;mem1,dax1.0"
 ```
-
 
 ## QEMU
 
