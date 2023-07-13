@@ -85,7 +85,7 @@ the memory as a numa node manually.
 
 Creating a numa node from dax device:
 ```
-daxctl 
+daxctl reconfigure-device --mode=system-ram dax0.0 
 ```
 
 Then you should create links between the dax device and the memory device.
