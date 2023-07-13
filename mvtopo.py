@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import subprocess
 import os
 import re
@@ -5,6 +6,12 @@ import json
 import copy
 from collections import defaultdict
 import argparse
+
+debug = False
+
+def debug_print(s):
+    if (g_debug):
+        print(s)
 
 class SetEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -40,9 +47,13 @@ def main():
     parser.add_argument('--dax_cmd', type=str, default='daxctl', 
                         help='Command for daxctl, default is "daxctl"')
 
+    parser.add_argument('-d', '--debug', action='store_true', help="debug prints")
+
     args = parser.parse_args()
     global cxl_cmd
     global dax_cmd
+    global g_debug
+    g_debug = args.debug
     cxl_cmd = args.cxl_cmd
     dax_cmd = args.dax_cmd
 
@@ -56,28 +67,28 @@ def generate_topology(manual_links: list|None) -> dict:
     try:
         generate_numa_nodes(graph)
     except Exception:
-        print("Error: Couldn't generate NUMA nodes.")
+        debug_print("Error: Couldn't generate NUMA nodes.")
     try:
         generate_dax_devices(graph)
     except Exception:
-        print("Error: Couldn't generate DAX devices.")
+        debug_print("Error: Couldn't generate DAX devices.")
     try:
         generate_cxl_devices(graph)
     except Exception:
-        print("Error: Couldn't generate DAX devices.")
+        debug_print("Error: Couldn't generate DAX devices.")
     try:
         generate_socket_devices(graph)
     except Exception:
-        print("Error: Couldn't generate socket devices.")
+        debug_print("Error: Couldn't generate socket devices.")
     try:
         generate_root_devices(graph) 
     except Exception:
-        print("Error: Couldn't generate root devices.")
+        debug_print("Error: Couldn't generate root devices.")
     generate_mem_dax_links(graph)
     try:
         generate_memory_topology(graph)
     except Exception:
-        print("Error: Couldn't generate DAX devices.")
+        debug_print("Error: Couldn't generate DAX devices.")
     generate_manual_links(graph, manual_links)
     return graph
 
@@ -192,7 +203,7 @@ def generate_cxl_devices_cxlctl(graph: dict):
         try:
             device.update(parse_lstopo_output(memdev['memdev']))
         except Exception as e:
-            print('Error: Couldn\'t interpret lstopo output.')
+            debug_print('Error: Couldn\'t interpret lstopo output.')
         graph[memdev['memdev']] = device
     return True
 
@@ -220,7 +231,7 @@ def generate_cxl_devices_sysfs(graph: dict) -> int:
             try:
                 memdev.update(parse_lstopo_output(memdev['memdev']))
             except Exception as e:
-                print('Error: Couldn\'t interpret lstopo output.')
+                debug_print('Error: Couldn\'t interpret lstopo output.')
             graph[item] =  memdev
     return True
 
@@ -267,7 +278,7 @@ def generate_mem_dax_links(graph) -> list:
             graph[link[0]]['links'].add(link[1])
             graph[link[1]]['parent'].add(link[0])
     except Exception:
-        print("Couldn't auto-generate cxl<->dax links. Please specify links manually")
+        debug_print("Couldn't auto-generate cxl<->dax links. Please specify links manually")
             
 def generate_socket_devices(graph: dict):
     for socket_name, node_list in get_socket_nodes().items():
@@ -317,7 +328,7 @@ def generate_manual_links(graph, manual_links):
             graph[link_from]['links'].add(link_to)
             graph[link_to]['parent'].add(link_from)
         except Exception as e:
-            print(f'Couldn\'t manually link {link_from} -> {link_to}')
+            debug_print(f'Couldn\'t manually link {link_from} -> {link_to}')
             
 def find_lstopo_parents(device):
     result = subprocess.run(['lstopo-no-graphics', '-v'], stdout=subprocess.PIPE)
@@ -393,7 +404,7 @@ def get_memory_info():
 def list_cxl_devices() -> list:
     out = subprocess.getoutput('ls /sys/bus/cxl/devices/')
     if "No such file or directory" in out:
-        print('Warning: Couldn\'t access CXL directory')
+        debug_print('Warning: Couldn\'t access CXL directory')
         return []
     return out.split("\n")
 
