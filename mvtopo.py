@@ -192,9 +192,9 @@ def autolink(spoofs: list):
                     min_socket = 0
                     idx = 0
                     while idx < len(sockets):
-                        sock = sockets[idx]
-                        if int(sock[curnode]) < min_dist:
-                            min_dist = int(sock[curnode])
+                        sock = sockets[f"socket{idx}"]
+                        if int(distances[idx][curnode]) < min_dist:
+                            min_dist = int(distances[idx][curnode])
                             min_socket = idx
                         idx += 1
                     links.append((f"socket{min_socket}", spoof[0]))
@@ -348,7 +348,8 @@ def generate_cxl_devices(graph: dict, spoof: list|None):
     if success:
         graph.update(graph_copy)
     else:
-        raise Exception(f'Couldn\'t generate CXL devices: {str(exceptions)}')
+        debug_print(f'Couldn\'t generate CXL devices: {str(exceptions)}')
+        return
 
 def generate_cxl_devices_spoof(graph: dict, spoof: list|None):
     for memdev in spoof:
