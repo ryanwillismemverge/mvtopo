@@ -192,9 +192,9 @@ def autolink(spoofs: list):
                     min_socket = 0
                     idx = 0
                     while idx < len(sockets):
-                        sock = sockets[idx]
-                        if int(sock[curnode]) < min_dist:
-                            min_dist = int(sock[curnode])
+                        sock = sockets[f"socket{idx}"]
+                        if int(distances[idx][curnode]) < min_dist:
+                            min_dist = int(distances[idx][curnode])
                             min_socket = idx
                         idx += 1
                     links.append((f"socket{min_socket}", spoof[0]))
